@@ -18,7 +18,6 @@ typedef struct {
 } pwm_channel_t;
 
 static pwm_channel_t s_pwm_channels[LEDC_MAX_CHANNELS] = {0};
-static bool s_ledc_timer_configured = false;
 
 /* 查找或分配 LEDC 通道 */
 static int find_or_allocate_channel(int pin)
@@ -303,22 +302,38 @@ esp_err_t tool_gpio_pwm_execute(const char *input_json, char *output, size_t out
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* 配置 LEDC 定时器（仅一次） */
-    if (!s_ledc_timer_configured) {
-        ledc_timer_config_t ledc_timer = {
-            .speed_mode = LEDC_MODE,
-            .duty_resolution = LEDC_TIMER_8_BIT,
-            .timer_num = LEDC_TIMER,
-            .freq_hz = 1000,
-            .clk_cfg = LEDC_AUTO_CLK,
-        };
-        esp_err_t err = ledc_timer_config(&ledc_timer);
-        if (err != ESP_OK) {
-            snprintf(output, output_size, "Error: failed to configure LEDC timer");
-            cJSON_Delete(root);
-            return err;
-        }
-        s_ledc_timer_configured = true;
+    /* 配置 LEDC 定时器（根据 resolution_bits 动态配置） */
+    ledc_timer_bit_t timer_resolution;
+    switch (resolution_bits) {
+        case 1:  timer_resolution = LEDC_TIMER_1_BIT;  break;
+        case 2:  timer_resolution = LEDC_TIMER_2_BIT;  break;
+        case 3:  timer_resolution = LEDC_TIMER_3_BIT;  break;
+        case 4:  timer_resolution = LEDC_TIMER_4_BIT;  break;
+        case 5:  timer_resolution = LEDC_TIMER_5_BIT;  break;
+        case 6:  timer_resolution = LEDC_TIMER_6_BIT;  break;
+        case 7:  timer_resolution = LEDC_TIMER_7_BIT;  break;
+        case 8:  timer_resolution = LEDC_TIMER_8_BIT;  break;
+        case 9:  timer_resolution = LEDC_TIMER_9_BIT;  break;
+        case 10: timer_resolution = LEDC_TIMER_10_BIT; break;
+        case 11: timer_resolution = LEDC_TIMER_11_BIT; break;
+        case 12: timer_resolution = LEDC_TIMER_12_BIT; break;
+        case 13: timer_resolution = LEDC_TIMER_13_BIT; break;
+        case 14: timer_resolution = LEDC_TIMER_14_BIT; break;
+        default: timer_resolution = LEDC_TIMER_8_BIT;  break;
+    }
+
+    ledc_timer_config_t ledc_timer = {
+        .speed_mode = LEDC_MODE,
+        .duty_resolution = timer_resolution,
+        .timer_num = LEDC_TIMER,
+        .freq_hz = (uint32_t)frequency,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    esp_err_t err = ledc_timer_config(&ledc_timer);
+    if (err != ESP_OK) {
+        snprintf(output, output_size, "Error: failed to configure LEDC timer (%s)", esp_err_to_name(err));
+        cJSON_Delete(root);
+        return err;
     }
 
     /* 查找或分配通道 */
@@ -339,18 +354,15 @@ esp_err_t tool_gpio_pwm_execute(const char *input_json, char *output, size_t out
         .hpoint = 0,
     };
 
-    esp_err_t err = ledc_channel_config(&ledc_channel);
+    err = ledc_channel_config(&ledc_channel);
     if (err != ESP_OK) {
-        snprintf(output, output_size, "Error: failed to configure LEDC channel");
+        snprintf(output, output_size, "Error: failed to configure LEDC channel (%s)", esp_err_to_name(err));
         cJSON_Delete(root);
         return err;
     }
 
-    /* 设置频率 */
-    ledc_set_freq(LEDC_MODE, LEDC_TIMER, frequency);
-
-    snprintf(output, output_size, "OK: PWM started on GPIO%d @ %dHz %d%%", pin, frequency, duty_percent);
-    ESP_LOGI(TAG, "gpio_pwm: pin=%d freq=%dHz duty=%d%%", pin, frequency, duty_percent);
+    snprintf(output, output_size, "OK: PWM started on GPIO%d @ %dHz %d%% (resolution=%dbit)", pin, frequency, duty_percent, resolution_bits);
+    ESP_LOGI(TAG, "gpio_pwm: pin=%d freq=%dHz duty=%d%% resolution=%dbit", pin, frequency, duty_percent, resolution_bits);
     cJSON_Delete(root);
     return ESP_OK;
 }
