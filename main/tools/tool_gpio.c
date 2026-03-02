@@ -96,3 +96,84 @@ esp_err_t tool_gpio_config_execute(const char *input_json, char *output, size_t 
     cJSON_Delete(root);
     return ESP_OK;
 }
+
+/* gpio_set 实现 */
+esp_err_t tool_gpio_set_execute(const char *input_json, char *output, size_t output_size)
+{
+    cJSON *root = cJSON_Parse(input_json);
+    if (!root) {
+        snprintf(output, output_size, "Error: invalid JSON input");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    cJSON *pin_item = cJSON_GetObjectItem(root, "pin");
+    if (!pin_item || !cJSON_IsNumber(pin_item)) {
+        snprintf(output, output_size, "Error: missing or invalid 'pin' field");
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+    int pin = pin_item->valueint;
+
+    if (!is_gpio_available(pin)) {
+        snprintf(output, output_size, "Error: GPIO%d is not available", pin);
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    cJSON *value_item = cJSON_GetObjectItem(root, "value");
+    if (!value_item || !cJSON_IsNumber(value_item)) {
+        snprintf(output, output_size, "Error: missing or invalid 'value' field");
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+    int value = value_item->valueint;
+
+    if (value != 0 && value != 1) {
+        snprintf(output, output_size, "Error: invalid value %d (valid: 0, 1)", value);
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t err = gpio_set_level(pin, value);
+    if (err != ESP_OK) {
+        snprintf(output, output_size, "Error: failed to set GPIO%d (%s)", pin, esp_err_to_name(err));
+        cJSON_Delete(root);
+        return err;
+    }
+
+    snprintf(output, output_size, "OK: GPIO%d set to %s", pin, value ? "high" : "low");
+    ESP_LOGI(TAG, "gpio_set: pin=%d value=%d", pin, value);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+/* gpio_read 实现 */
+esp_err_t tool_gpio_read_execute(const char *input_json, char *output, size_t output_size)
+{
+    cJSON *root = cJSON_Parse(input_json);
+    if (!root) {
+        snprintf(output, output_size, "Error: invalid JSON input");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    cJSON *pin_item = cJSON_GetObjectItem(root, "pin");
+    if (!pin_item || !cJSON_IsNumber(pin_item)) {
+        snprintf(output, output_size, "Error: missing or invalid 'pin' field");
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+    int pin = pin_item->valueint;
+
+    if (!is_gpio_available(pin)) {
+        snprintf(output, output_size, "Error: GPIO%d is not available", pin);
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    int level = gpio_get_level(pin);
+
+    snprintf(output, output_size, "GPIO%d = %d (%s)", pin, level, level ? "high" : "low");
+    ESP_LOGI(TAG, "gpio_read: pin=%d level=%d", pin, level);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
