@@ -8,6 +8,51 @@
 
 static const char *TAG = "tool_gpio";
 
+#define LEDC_TIMER              LEDC_TIMER_0
+#define LEDC_MODE               LEDC_LOW_SPEED_MODE
+#define LEDC_MAX_CHANNELS       8
+
+typedef struct {
+    int pin;
+    bool in_use;
+} pwm_channel_t;
+
+static pwm_channel_t s_pwm_channels[LEDC_MAX_CHANNELS] = {0};
+static bool s_ledc_timer_configured = false;
+
+/* 查找或分配 LEDC 通道 */
+static int find_or_allocate_channel(int pin)
+{
+    /* 查找是否已分配 */
+    for (int i = 0; i < LEDC_MAX_CHANNELS; i++) {
+        if (s_pwm_channels[i].in_use && s_pwm_channels[i].pin == pin) {
+            return i;
+        }
+    }
+    /* 分配新通道 */
+    for (int i = 0; i < LEDC_MAX_CHANNELS; i++) {
+        if (!s_pwm_channels[i].in_use) {
+            s_pwm_channels[i].pin = pin;
+            s_pwm_channels[i].in_use = true;
+            return i;
+        }
+    }
+    return -1; /* 无可用通道 */
+}
+
+/* 释放 LEDC 通道 */
+static void release_channel(int pin)
+{
+    for (int i = 0; i < LEDC_MAX_CHANNELS; i++) {
+        if (s_pwm_channels[i].in_use && s_pwm_channels[i].pin == pin) {
+            ledc_stop(LEDC_MODE, i, 0);
+            s_pwm_channels[i].in_use = false;
+            s_pwm_channels[i].pin = -1;
+            break;
+        }
+    }
+}
+
 /* 可用引脚检查 */
 static bool is_gpio_available(int pin)
 {
@@ -174,6 +219,138 @@ esp_err_t tool_gpio_read_execute(const char *input_json, char *output, size_t ou
 
     snprintf(output, output_size, "GPIO%d = %d (%s)", pin, level, level ? "high" : "low");
     ESP_LOGI(TAG, "gpio_read: pin=%d level=%d", pin, level);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+/* gpio_pwm 实现 */
+esp_err_t tool_gpio_pwm_execute(const char *input_json, char *output, size_t output_size)
+{
+    cJSON *root = cJSON_Parse(input_json);
+    if (!root) {
+        snprintf(output, output_size, "Error: invalid JSON input");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    cJSON *pin_item = cJSON_GetObjectItem(root, "pin");
+    if (!pin_item || !cJSON_IsNumber(pin_item)) {
+        snprintf(output, output_size, "Error: missing or invalid 'pin' field");
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+    int pin = pin_item->valueint;
+
+    if (!is_gpio_available(pin)) {
+        snprintf(output, output_size, "Error: GPIO%d is not available", pin);
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* 解析 enable (默认 true) */
+    cJSON *enable_item = cJSON_GetObjectItem(root, "enable");
+    bool enable = true;
+    if (enable_item) {
+        enable = cJSON_IsTrue(enable_item);
+    }
+
+    if (!enable) {
+        /* 停止 PWM */
+        release_channel(pin);
+        snprintf(output, output_size, "OK: PWM stopped on GPIO%d", pin);
+        ESP_LOGI(TAG, "gpio_pwm: stopped on pin=%d", pin);
+        cJSON_Delete(root);
+        return ESP_OK;
+    }
+
+    /* 启动或更新 PWM */
+    cJSON *freq_item = cJSON_GetObjectItem(root, "frequency");
+    cJSON *duty_item = cJSON_GetObjectItem(root, "duty");
+
+    if (!freq_item || !cJSON_IsNumber(freq_item)) {
+        snprintf(output, output_size, "Error: missing or invalid 'frequency' field");
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!duty_item || !cJSON_IsNumber(duty_item)) {
+        snprintf(output, output_size, "Error: missing or invalid 'duty' field");
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    int frequency = freq_item->valueint;
+    int duty_percent = duty_item->valueint;
+
+    if (frequency < 1 || frequency > 40000000) {
+        snprintf(output, output_size, "Error: frequency must be 1-40000000 Hz");
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (duty_percent < 0 || duty_percent > 100) {
+        snprintf(output, output_size, "Error: duty must be 0-100%%");
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* 解析 resolution_bits (默认 8) */
+    cJSON *res_item = cJSON_GetObjectItem(root, "resolution_bits");
+    int resolution_bits = 8;
+    if (res_item && cJSON_IsNumber(res_item)) {
+        resolution_bits = res_item->valueint;
+    }
+    if (resolution_bits < 1 || resolution_bits > 14) {
+        snprintf(output, output_size, "Error: resolution_bits must be 1-14");
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* 配置 LEDC 定时器（仅一次） */
+    if (!s_ledc_timer_configured) {
+        ledc_timer_config_t ledc_timer = {
+            .speed_mode = LEDC_MODE,
+            .duty_resolution = LEDC_TIMER_8_BIT,
+            .timer_num = LEDC_TIMER,
+            .freq_hz = 1000,
+            .clk_cfg = LEDC_AUTO_CLK,
+        };
+        esp_err_t err = ledc_timer_config(&ledc_timer);
+        if (err != ESP_OK) {
+            snprintf(output, output_size, "Error: failed to configure LEDC timer");
+            cJSON_Delete(root);
+            return err;
+        }
+        s_ledc_timer_configured = true;
+    }
+
+    /* 查找或分配通道 */
+    int channel = find_or_allocate_channel(pin);
+    if (channel < 0) {
+        snprintf(output, output_size, "Error: no free LEDC channel available");
+        cJSON_Delete(root);
+        return ESP_ERR_NO_MEM;
+    }
+
+    /* 配置通道 */
+    ledc_channel_config_t ledc_channel = {
+        .gpio_num = pin,
+        .speed_mode = LEDC_MODE,
+        .channel = channel,
+        .timer_sel = LEDC_TIMER,
+        .duty = (duty_percent * ((1 << resolution_bits) - 1)) / 100,
+        .hpoint = 0,
+    };
+
+    esp_err_t err = ledc_channel_config(&ledc_channel);
+    if (err != ESP_OK) {
+        snprintf(output, output_size, "Error: failed to configure LEDC channel");
+        cJSON_Delete(root);
+        return err;
+    }
+
+    /* 设置频率 */
+    ledc_set_freq(LEDC_MODE, LEDC_TIMER, frequency);
+
+    snprintf(output, output_size, "OK: PWM started on GPIO%d @ %dHz %d%%", pin, frequency, duty_percent);
+    ESP_LOGI(TAG, "gpio_pwm: pin=%d freq=%dHz duty=%d%%", pin, frequency, duty_percent);
     cJSON_Delete(root);
     return ESP_OK;
 }
