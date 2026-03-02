@@ -4,6 +4,7 @@
 #include "tools/tool_get_time.h"
 #include "tools/tool_files.h"
 #include "tools/tool_cron.h"
+#include "tools/tool_gpio.h"
 
 #include <string.h>
 #include "esp_log.h"
@@ -11,7 +12,7 @@
 
 static const char *TAG = "tools";
 
-#define MAX_TOOLS 12
+#define MAX_TOOLS 16
 
 static mimi_tool_t s_tools[MAX_TOOLS];
 static int s_tool_count = 0;
@@ -175,6 +176,70 @@ esp_err_t tool_registry_init(void)
         .execute = tool_cron_remove_execute,
     };
     register_tool(&cr);
+
+    /* Register gpio_config */
+    mimi_tool_t gc = {
+        .name = "gpio_config",
+        .description = "Configure GPIO pin mode with optional pull-up/pull-down resistors. Must be called before using a pin.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{"
+            "\"pin\":{\"type\":\"integer\",\"description\":\"GPIO pin number (0-48)\",\"minimum\":0,\"maximum\":48},"
+            "\"mode\":{\"type\":\"string\",\"description\":\"Pin mode\",\"enum\":[\"input\",\"output\",\"input_output\"]},"
+            "\"pull_up\":{\"type\":\"boolean\",\"description\":\"Enable internal pull-up resistor (default: false)\"},"
+            "\"pull_down\":{\"type\":\"boolean\",\"description\":\"Enable internal pull-down resistor (default: false)\"}"
+            "},"
+            "\"required\":[\"pin\",\"mode\"]}",
+        .execute = tool_gpio_config_execute,
+    };
+    register_tool(&gc);
+
+    /* Register gpio_set */
+    mimi_tool_t gs = {
+        .name = "gpio_set",
+        .description = "Set GPIO output level (high/low). Pin must be configured as output first using gpio_config.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{"
+            "\"pin\":{\"type\":\"integer\",\"description\":\"GPIO pin number (0-48)\",\"minimum\":0,\"maximum\":48},"
+            "\"value\":{\"type\":\"integer\",\"description\":\"Output level\",\"enum\":[0,1]}"
+            "},"
+            "\"required\":[\"pin\",\"value\"]}",
+        .execute = tool_gpio_set_execute,
+    };
+    register_tool(&gs);
+
+    /* Register gpio_read */
+    mimi_tool_t gr = {
+        .name = "gpio_read",
+        .description = "Read GPIO input level. Returns 0 (low) or 1 (high). Pin should be configured as input first.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{"
+            "\"pin\":{\"type\":\"integer\",\"description\":\"GPIO pin number (0-48)\",\"minimum\":0,\"maximum\":48}"
+            "},"
+            "\"required\":[\"pin\"]}",
+        .execute = tool_gpio_read_execute,
+    };
+    register_tool(&gr);
+
+    /* Register gpio_pwm */
+    mimi_tool_t gp = {
+        .name = "gpio_pwm",
+        .description = "Configure PWM output on GPIO pin using LEDC peripheral. Can enable/disable PWM or update frequency/duty.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{"
+            "\"pin\":{\"type\":\"integer\",\"description\":\"GPIO pin number (0-48)\",\"minimum\":0,\"maximum\":48},"
+            "\"frequency\":{\"type\":\"integer\",\"description\":\"PWM frequency in Hz (1-40000000)\",\"minimum\":1,\"maximum\":40000000},"
+            "\"duty\":{\"type\":\"integer\",\"description\":\"Duty cycle percentage (0-100)\",\"minimum\":0,\"maximum\":100},"
+            "\"resolution_bits\":{\"type\":\"integer\",\"description\":\"PWM resolution in bits (1-14, default: 8)\",\"minimum\":1,\"maximum\":14},"
+            "\"enable\":{\"type\":\"boolean\",\"description\":\"Enable or disable PWM output (default: true)\"}"
+            "},"
+            "\"required\":[\"pin\"]}",
+        .execute = tool_gpio_pwm_execute,
+    };
+    register_tool(&gp);
 
     build_tools_json();
 
