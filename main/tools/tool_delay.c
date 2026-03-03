@@ -33,12 +33,17 @@ esp_err_t tool_delay_execute(const char *input_json, char *output, size_t output
     }
 
     /* Parse tool_name */
-    const char *tool_name = cJSON_GetStringValue(cJSON_GetObjectItem(root, "tool_name"));
-    if (!tool_name || strlen(tool_name) == 0) {
+    const char *tool_name_ptr = cJSON_GetStringValue(cJSON_GetObjectItem(root, "tool_name"));
+    if (!tool_name_ptr || strlen(tool_name_ptr) == 0) {
         snprintf(output, output_size, "Error: missing or invalid 'tool_name' field");
         cJSON_Delete(root);
         return ESP_ERR_INVALID_ARG;
     }
+
+    /* Copy tool_name before deleting root */
+    char tool_name[64];
+    strncpy(tool_name, tool_name_ptr, sizeof(tool_name) - 1);
+    tool_name[sizeof(tool_name) - 1] = '\0';
 
     /* Prevent recursive delay_execute calls */
     if (strcmp(tool_name, "delay_execute") == 0) {
