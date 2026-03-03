@@ -8,9 +8,8 @@
 
 static const char *TAG = "tool_gpio";
 
-#define LEDC_TIMER              LEDC_TIMER_0
 #define LEDC_MODE               LEDC_LOW_SPEED_MODE
-#define LEDC_MAX_CHANNELS       8
+#define LEDC_MAX_CHANNELS       4  /* LEDC 只有 4 个定时器，通道与定时器一一对应 */
 
 typedef struct {
     int pin;
@@ -44,7 +43,10 @@ static void release_channel(int pin)
 {
     for (int i = 0; i < LEDC_MAX_CHANNELS; i++) {
         if (s_pwm_channels[i].in_use && s_pwm_channels[i].pin == pin) {
-            ledc_stop(LEDC_MODE, i, 0);
+            esp_err_t err = ledc_stop(LEDC_MODE, i, 0);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "ledc_stop failed for channel %d: %s", i, esp_err_to_name(err));
+            }
             s_pwm_channels[i].in_use = false;
             s_pwm_channels[i].pin = -1;
             break;
@@ -277,14 +279,14 @@ esp_err_t tool_gpio_pwm_execute(const char *input_json, char *output, size_t out
     }
 
     int frequency = freq_item->valueint;
-    int duty_percent = duty_item->valueint;
+    double duty_percent = duty_item->valuedouble;
 
     if (frequency < 1 || frequency > 40000000) {
         snprintf(output, output_size, "Error: frequency must be 1-40000000 Hz");
         cJSON_Delete(root);
         return ESP_ERR_INVALID_ARG;
     }
-    if (duty_percent < 0 || duty_percent > 100) {
+    if (duty_percent < 0.0 || duty_percent > 100.0) {
         snprintf(output, output_size, "Error: duty must be 0-100%%");
         cJSON_Delete(root);
         return ESP_ERR_INVALID_ARG;
@@ -322,18 +324,13 @@ esp_err_t tool_gpio_pwm_execute(const char *input_json, char *output, size_t out
         default: timer_resolution = LEDC_TIMER_8_BIT;  break;
     }
 
-    ledc_timer_config_t ledc_timer = {
-        .speed_mode = LEDC_MODE,
-        .duty_resolution = timer_resolution,
-        .timer_num = LEDC_TIMER,
-        .freq_hz = (uint32_t)frequency,
-        .clk_cfg = LEDC_AUTO_CLK,
-    };
-    esp_err_t err = ledc_timer_config(&ledc_timer);
-    if (err != ESP_OK) {
-        snprintf(output, output_size, "Error: failed to configure LEDC timer (%s)", esp_err_to_name(err));
-        cJSON_Delete(root);
-        return err;
+    /* 检查是否已为此引脚分配 PWM 通道 */
+    bool pin_already_has_pwm = false;
+    for (int i = 0; i < LEDC_MAX_CHANNELS; i++) {
+        if (s_pwm_channels[i].in_use && s_pwm_channels[i].pin == pin) {
+            pin_already_has_pwm = true;
+            break;
+        }
     }
 
     /* 查找或分配通道 */
@@ -344,25 +341,49 @@ esp_err_t tool_gpio_pwm_execute(const char *input_json, char *output, size_t out
         return ESP_ERR_NO_MEM;
     }
 
+    /* 只有在新分配通道时才重置 GPIO，避免更新 PWM 时信号中断 */
+    if (!pin_already_has_pwm) {
+        gpio_reset_pin(pin);
+    }
+
+    /* 配置 LEDC 定时器（每个通道使用独立定时器，避免频率冲突） */
+    ledc_timer_config_t ledc_timer = {
+        .speed_mode = LEDC_MODE,
+        .duty_resolution = timer_resolution,
+        .timer_num = channel,  /* 每个通道使用独立的定时器 */
+        .freq_hz = (uint32_t)frequency,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    esp_err_t err = ledc_timer_config(&ledc_timer);
+    if (err != ESP_OK) {
+        snprintf(output, output_size, "Error: failed to configure LEDC timer (%s)", esp_err_to_name(err));
+        cJSON_Delete(root);
+        return err;
+    }
+
     /* 配置通道 */
+    uint32_t max_duty = (1U << resolution_bits) - 1;
+    uint32_t duty_value = (uint32_t)((duty_percent * max_duty) / 100.0);
+
     ledc_channel_config_t ledc_channel = {
         .gpio_num = pin,
         .speed_mode = LEDC_MODE,
         .channel = channel,
-        .timer_sel = LEDC_TIMER,
-        .duty = (duty_percent * ((1 << resolution_bits) - 1)) / 100,
+        .timer_sel = channel,  /* 使用与通道号相同的定时器 */
+        .duty = duty_value,
         .hpoint = 0,
     };
 
     err = ledc_channel_config(&ledc_channel);
     if (err != ESP_OK) {
+        release_channel(pin);  /* 配置失败时释放通道 */
         snprintf(output, output_size, "Error: failed to configure LEDC channel (%s)", esp_err_to_name(err));
         cJSON_Delete(root);
         return err;
     }
 
-    snprintf(output, output_size, "OK: PWM started on GPIO%d @ %dHz %d%% (resolution=%dbit)", pin, frequency, duty_percent, resolution_bits);
-    ESP_LOGI(TAG, "gpio_pwm: pin=%d freq=%dHz duty=%d%% resolution=%dbit", pin, frequency, duty_percent, resolution_bits);
+    snprintf(output, output_size, "OK: PWM started on GPIO%d @ %dHz %.1f%% (resolution=%dbit)", pin, frequency, duty_percent, resolution_bits);
+    ESP_LOGI(TAG, "gpio_pwm: pin=%d freq=%dHz duty=%.1f%% resolution=%dbit", pin, frequency, duty_percent, resolution_bits);
     cJSON_Delete(root);
     return ESP_OK;
 }

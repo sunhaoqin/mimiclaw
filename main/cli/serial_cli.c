@@ -588,6 +588,21 @@ static int cmd_cron_start(int argc, char **argv)
     return 1;
 }
 
+static void strip_quotes(char *str)
+{
+    if (!str || !str[0]) return;
+
+    size_t len = strlen(str);
+    if (len >= 2) {
+        if ((str[0] == '"' && str[len - 1] == '"') ||
+            (str[0] == '\'' && str[len - 1] == '\'')) {
+            /* Shift content left by 1 and remove closing quote */
+            memmove(str, str + 1, len - 2);
+            str[len - 2] = '\0';
+        }
+    }
+}
+
 static int cmd_tool_exec(int argc, char **argv)
 {
     if (argc < 2) {
@@ -596,6 +611,9 @@ static int cmd_tool_exec(int argc, char **argv)
     }
 
     const char *tool_name = argv[1];
+    if (argc >= 3) {
+        strip_quotes(argv[2]);
+    }
     const char *input_json = (argc >= 3) ? argv[2] : "{}";
 
     char *output = calloc(1, 4096);
@@ -1025,7 +1043,7 @@ esp_err_t serial_cli_init(void)
     /* tool_exec */
     esp_console_cmd_t tool_exec_cmd = {
         .command = "tool_exec",
-        .help = "Execute a registered tool: tool_exec <name> '{...json...}'",
+        .help = "Execute a registered tool: tool_exec <name> {<json>}",
         .func = &cmd_tool_exec,
     };
     esp_console_cmd_register(&tool_exec_cmd);

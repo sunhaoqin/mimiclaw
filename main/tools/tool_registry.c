@@ -234,7 +234,7 @@ esp_err_t tool_registry_init(void)
             "\"properties\":{"
             "\"pin\":{\"type\":\"integer\",\"description\":\"GPIO pin number (0-48)\",\"minimum\":0,\"maximum\":48},"
             "\"frequency\":{\"type\":\"integer\",\"description\":\"PWM frequency in Hz (1-40000000)\",\"minimum\":1,\"maximum\":40000000},"
-            "\"duty\":{\"type\":\"integer\",\"description\":\"Duty cycle percentage (0-100)\",\"minimum\":0,\"maximum\":100},"
+            "\"duty\":{\"type\":\"number\",\"description\":\"Duty cycle percentage 0.0-100.0, supports decimals for precise servo control (e.g., 7.5 for 1.5ms@50Hz)\",\"minimum\":0.0,\"maximum\":100.0},"
             "\"resolution_bits\":{\"type\":\"integer\",\"description\":\"PWM resolution in bits (1-14, default: 10). Use 10+ for low frequencies like 50Hz servo control\",\"minimum\":1,\"maximum\":14},"
             "\"enable\":{\"type\":\"boolean\",\"description\":\"Enable or disable PWM output (default: true)\"}"
             "},"
