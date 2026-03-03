@@ -1,0 +1,50 @@
+{
+  "name": "mimiclaw",
+  "image": "hexchip/devcontainer:esp-idf-release-v5.5-claude-code",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "espressif.esp-idf-extension",
+        "espressif.esp-idf-web",
+        "ms-vscode.cpptools",
+        "ms-vscode.cpptools-themes",
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "esbenp.prettier-vscode",
+        "shd101wyy.markdown-preview-enhanced"
+      ],
+      "settings": {
+        "http.useLocalProxyConfiguration": false,
+        "idf.espIdfPath": "/opt/esp/idf",
+        "idf.toolsPath": "/opt/esp",
+        "idf.gitPath": "/usr/bin/git",
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff"
+        }
+      }
+    }
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "configureZshAsDefaultShell": true,
+      "username": "${localEnv:USER}",
+      "userUid": "1000",
+      "userGid": "1000"
+    }
+  },
+  "containerUser": "${localEnv:USER}",
+  "mounts": [
+    "source=/dev,target=/dev,type=bind",
+    "source=/mnt/wslg,target=/mnt/wslg,type=bind",
+    "source=mimicla-command_history-${devcontainerId},target=/opt/devcontainer/commandhistory,type=volume",
+    "source=mimicla-claude_config-${devcontainerId},target=/opt/devcontainer/.claude,type=volume",
+    "source=mimicla-extensions,target=/opt/devcontainer/vscode-extensions,type=volume"
+  ],
+  "containerEnv": {
+    "PULSE_SERVER": "${localEnv:PULSE_SERVER}"
+  },
+  "runArgs": ["--privileged", "--group-add", "dialout"],
+  "postCreateCommand": "bash .devcontainer/post_create.sh"
+}

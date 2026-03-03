@@ -290,9 +290,9 @@ esp_err_t tool_gpio_pwm_execute(const char *input_json, char *output, size_t out
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* 解析 resolution_bits (默认 8) */
+    /* 解析 resolution_bits (默认 10，为低频PWM如舵机50Hz提供更好的兼容性) */
     cJSON *res_item = cJSON_GetObjectItem(root, "resolution_bits");
-    int resolution_bits = 8;
+    int resolution_bits = 10;
     if (res_item && cJSON_IsNumber(res_item)) {
         resolution_bits = res_item->valueint;
     }

@@ -18,10 +18,7 @@ mmap_generate_*.h
 mimi_secrets.h
 
 # IDE / Editor
-.vscode/
-.devcontainer/
 .idea/
-.clangd
 *.swp
 *.swo
 *~

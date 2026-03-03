@@ -194,12 +194,12 @@ static const char *llm_api_url(void)
 
 static const char *llm_api_host(void)
 {
-    return provider_is_openai() ? "api.openai.com" : "api.anthropic.com";
+    return provider_is_openai() ? "api.openai.com" : "api.kimi.com";
 }
 
 static const char *llm_api_path(void)
 {
-    return provider_is_openai() ? "/v1/chat/completions" : "/v1/messages";
+    return provider_is_openai() ? "/v1/chat/completions" : "coding/v1/messages";
 }
 
 /* ── Init ─────────────────────────────────────────────────────── */
@@ -356,11 +356,11 @@ static esp_err_t llm_http_via_proxy(const char *post_data, resp_buf_t *rb, int *
 
 static esp_err_t llm_http_call(const char *post_data, resp_buf_t *rb, int *out_status)
 {
-    if (http_proxy_is_enabled()) {
-        return llm_http_via_proxy(post_data, rb, out_status);
-    } else {
+    // if (http_proxy_is_enabled()) {
+    //     return llm_http_via_proxy(post_data, rb, out_status);
+    // } else {
         return llm_http_direct(post_data, rb, out_status);
-    }
+    // }
 }
 
 static cJSON *convert_tools_openai(const char *tools_json)
