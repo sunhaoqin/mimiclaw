@@ -5,6 +5,8 @@
 #include "tools/tool_files.h"
 #include "tools/tool_cron.h"
 #include "tools/tool_gpio.h"
+#include "tools/tool_delay.h"
+#include "tools/tool_sequence.h"
 
 #include <string.h>
 #include "esp_log.h"
@@ -12,7 +14,7 @@
 
 static const char *TAG = "tools";
 
-#define MAX_TOOLS 16
+#define MAX_TOOLS 18
 
 static mimi_tool_t s_tools[MAX_TOOLS];
 static int s_tool_count = 0;
@@ -233,13 +235,47 @@ esp_err_t tool_registry_init(void)
             "\"pin\":{\"type\":\"integer\",\"description\":\"GPIO pin number (0-48)\",\"minimum\":0,\"maximum\":48},"
             "\"frequency\":{\"type\":\"integer\",\"description\":\"PWM frequency in Hz (1-40000000)\",\"minimum\":1,\"maximum\":40000000},"
             "\"duty\":{\"type\":\"integer\",\"description\":\"Duty cycle percentage (0-100)\",\"minimum\":0,\"maximum\":100},"
-            "\"resolution_bits\":{\"type\":\"integer\",\"description\":\"PWM resolution in bits (1-14, default: 8)\",\"minimum\":1,\"maximum\":14},"
+            "\"resolution_bits\":{\"type\":\"integer\",\"description\":\"PWM resolution in bits (1-14, default: 10). Use 10+ for low frequencies like 50Hz servo control\",\"minimum\":1,\"maximum\":14},"
             "\"enable\":{\"type\":\"boolean\",\"description\":\"Enable or disable PWM output (default: true)\"}"
             "},"
             "\"required\":[\"pin\"]}",
         .execute = tool_gpio_pwm_execute,
     };
     register_tool(&gp);
+
+    /* Register delay_execute */
+    mimi_tool_t de = {
+        .name = "delay_execute",
+        .description = "Execute a tool after a specified delay. Blocks until delay completes and target tool executes.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{"
+            "\"delay_ms\":{\"type\":\"integer\",\"description\":\"Delay in milliseconds (0-3600000)\",\"minimum\":0,\"maximum\":3600000},"
+            "\"tool_name\":{\"type\":\"string\",\"description\":\"Name of tool to execute after delay\"},"
+            "\"tool_args\":{\"type\":\"object\",\"description\":\"Arguments for the target tool (default: {})\"}"
+            "},"
+            "\"required\":[\"delay_ms\",\"tool_name\"]}",
+        .execute = tool_delay_execute,
+    };
+    register_tool(&de);
+
+    /* Register tool_sequence */
+    mimi_tool_t ts = {
+        .name = "tool_sequence",
+        .description = "Execute a sequence of tools sequentially. Stops on first failure (fast-fail). Max 20 steps. Logs to /spiffs/logs/.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{"
+            "\"steps\":{\"type\":\"array\",\"description\":\"Array of tool execution steps (max 20)\","
+            "\"items\":{\"type\":\"object\",\"properties\":{"
+            "\"tool\":{\"type\":\"string\",\"description\":\"Tool name to execute\"},"
+            "\"args\":{\"type\":\"object\",\"description\":\"Tool arguments\"}"
+            "},\"required\":[\"tool\"]}}"
+            "},"
+            "\"required\":[\"steps\"]}",
+        .execute = tool_sequence_execute,
+    };
+    register_tool(&ts);
 
     build_tools_json();
 
