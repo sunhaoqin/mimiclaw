@@ -7,6 +7,8 @@
 #include "tools/tool_gpio.h"
 #include "tools/tool_delay.h"
 #include "tools/tool_sequence.h"
+#include "tools/tool_ws2812.h"
+#include "tools/tool_stepper.h"
 
 #include <string.h>
 #include "esp_log.h"
@@ -14,7 +16,7 @@
 
 static const char *TAG = "tools";
 
-#define MAX_TOOLS 18
+#define MAX_TOOLS 24
 
 static mimi_tool_t s_tools[MAX_TOOLS];
 static int s_tool_count = 0;
@@ -276,6 +278,105 @@ esp_err_t tool_registry_init(void)
         .execute = tool_sequence_execute,
     };
     register_tool(&ts);
+
+    /* Register ws2812_init */
+    mimi_tool_t w2i = {
+        .name = "ws2812_init",
+        .description = "Initialize WS2812 LED strip on specified GPIO pin. Must be called before other ws2812 commands.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{"
+            "\"pin\":{\"type\":\"integer\",\"description\":\"GPIO pin number (0-48, excluding restricted pins)\",\"minimum\":0,\"maximum\":48},"
+            "\"num_leds\":{\"type\":\"integer\",\"description\":\"Number of LEDs in the strip (1-256)\",\"minimum\":1,\"maximum\":256}"
+            "},"
+            "\"required\":[\"pin\",\"num_leds\"]}",
+        .execute = tool_ws2812_init_execute,
+    };
+    register_tool(&w2i);
+
+    /* Register ws2812_set */
+    mimi_tool_t w2s = {
+        .name = "ws2812_set",
+        .description = "Set color of a single LED or all LEDs on the strip. Colors are specified as {r,g,b} values 0-255.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{"
+            "\"pin\":{\"type\":\"integer\",\"description\":\"GPIO pin number where strip is initialized\",\"minimum\":0,\"maximum\":48},"
+            "\"index\":{\"type\":\"integer\",\"description\":\"LED index (0-based), omit to set all LEDs\"},"
+            "\"color\":{\"type\":\"object\",\"description\":\"RGB color values\",\"properties\":{"
+            "\"r\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":255},"
+            "\"g\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":255},"
+            "\"b\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":255}"
+            "},\"required\":[\"r\",\"g\",\"b\"]}"
+            "},"
+            "\"required\":[\"pin\",\"color\"]}",
+        .execute = tool_ws2812_set_execute,
+    };
+    register_tool(&w2s);
+
+    /* Register ws2812_clear */
+    mimi_tool_t w2c = {
+        .name = "ws2812_clear",
+        .description = "Turn off all LEDs on the strip (set to black).",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{"
+            "\"pin\":{\"type\":\"integer\",\"description\":\"GPIO pin number where strip is initialized\",\"minimum\":0,\"maximum\":48}"
+            "},"
+            "\"required\":[\"pin\"]}",
+        .execute = tool_ws2812_clear_execute,
+    };
+    register_tool(&w2c);
+
+    /* Register stepper_init */
+    mimi_tool_t sti = {
+        .name = "stepper_init",
+        .description = "Initialize DRV8825 stepper motor driver. Configure GPIO pins for STEP, DIR, and ENABLE. Microstep mode is set by external DIP switch.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{"
+            "\"step_pin\":{\"type\":\"integer\",\"description\":\"GPIO pin for STEP signal (also used as motor ID)\",\"minimum\":0,\"maximum\":48},"
+            "\"dir_pin\":{\"type\":\"integer\",\"description\":\"GPIO pin for DIR signal\",\"minimum\":0,\"maximum\":48},"
+            "\"enable_pin\":{\"type\":\"integer\",\"description\":\"GPIO pin for ENABLE signal (active low)\",\"minimum\":0,\"maximum\":48},"
+            "\"microstep\":{\"type\":\"integer\",\"description\":\"Microstep mode configured by DIP switch: 1/2/4/8/16/32, default 16\",\"enum\":[1,2,4,8,16,32]}"
+            "},"
+            "\"required\":[\"step_pin\",\"dir_pin\",\"enable_pin\"]}",
+        .execute = tool_stepper_init_execute,
+    };
+    register_tool(&sti);
+
+    /* Register stepper_move */
+    mimi_tool_t stm = {
+        .name = "stepper_move",
+        .description = "Move stepper motor with trapezoidal acceleration/deceleration. Runs in background task.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{"
+            "\"step_pin\":{\"type\":\"integer\",\"description\":\"STEP pin to identify motor instance\",\"minimum\":0,\"maximum\":48},"
+            "\"steps\":{\"type\":\"integer\",\"description\":\"Number of steps to move (1-100000)\",\"minimum\":1,\"maximum\":100000},"
+            "\"direction\":{\"type\":\"string\",\"description\":\"Rotation direction\",\"enum\":[\"cw\",\"ccw\"]},"
+            "\"speed_max\":{\"type\":\"integer\",\"description\":\"Maximum speed in Hz (100-5000), default 2000\",\"minimum\":100,\"maximum\":5000},"
+            "\"speed_start\":{\"type\":\"integer\",\"description\":\"Start speed in Hz (100-speed_max), default 200\",\"minimum\":100,\"maximum\":5000},"
+            "\"accel_ratio\":{\"type\":\"number\",\"description\":\"Acceleration/deceleration ratio 0.0-0.5, default 0.2\",\"minimum\":0.0,\"maximum\":0.5}"
+            "},"
+            "\"required\":[\"step_pin\",\"steps\",\"direction\"]}",
+        .execute = tool_stepper_move_execute,
+    };
+    register_tool(&stm);
+
+    /* Register stepper_stop */
+    mimi_tool_t sts = {
+        .name = "stepper_stop",
+        .description = "Stop stepper motor immediately.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{"
+            "\"step_pin\":{\"type\":\"integer\",\"description\":\"STEP pin to identify motor instance\",\"minimum\":0,\"maximum\":48}"
+            "},"
+            "\"required\":[\"step_pin\"]}",
+        .execute = tool_stepper_stop_execute,
+    };
+    register_tool(&sts);
 
     build_tools_json();
 
