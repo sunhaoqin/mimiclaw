@@ -194,7 +194,7 @@ static const char *llm_api_url(void)
 
 static const char *llm_api_host(void)
 {
-    return provider_is_openai() ? "api.openai.com" : "api.kimi.com";
+    return provider_is_openai() ? "192.168.31.200:8080" : "api.kimi.com";
 }
 
 static const char *llm_api_path(void)
@@ -554,7 +554,7 @@ esp_err_t llm_chat_tools(const char *system_prompt,
 {
     memset(resp, 0, sizeof(*resp));
 
-    if (s_api_key[0] == '\0') return ESP_ERR_INVALID_STATE;
+    // if (s_api_key[0] == '\0') return ESP_ERR_INVALID_STATE;
 
     /* Build request body (non-streaming) */
     cJSON *body = cJSON_CreateObject();

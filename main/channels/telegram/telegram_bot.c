@@ -378,7 +378,7 @@ static void telegram_poll_task(void *arg)
 
     while (1) {
         if (s_bot_token[0] == '\0') {
-            ESP_LOGW(TAG, "No bot token configured, waiting...");
+            // ESP_LOGW(TAG, "No bot token configured, waiting...");
             vTaskDelay(pdMS_TO_TICKS(5000));
             continue;
         }
