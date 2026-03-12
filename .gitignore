@@ -56,3 +56,5 @@ nanobot/
 Thumbs.db
 references/
 .venv/
+
+.claude/settings.local.json

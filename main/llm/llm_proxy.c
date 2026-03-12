@@ -194,12 +194,12 @@ static const char *llm_api_url(void)
 
 static const char *llm_api_host(void)
 {
-    return provider_is_openai() ? "192.168.31.200:8080" : "api.kimi.com";
+    return provider_is_openai() ? "openrouter.ai" : "api.kimi.com";
 }
 
 static const char *llm_api_path(void)
 {
-    return provider_is_openai() ? "/v1/chat/completions" : "coding/v1/messages";
+    return provider_is_openai() ? "api/v1/chat/completions" : "coding/v1/messages";
 }
 
 /* ── Init ─────────────────────────────────────────────────────── */
