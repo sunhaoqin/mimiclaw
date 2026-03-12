@@ -1,10 +1,10 @@
 #include "tool_stepper.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
+#include "driver/rmt_tx.h"
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "rom/ets_sys.h"
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
@@ -19,6 +19,9 @@ static const char *TAG = "tool_stepper";
 #define DEFAULT_SPEED_START     200     // Hz
 #define DEFAULT_ACCEL_RATIO     0.2     // 20%
 
+/* RMT 分辨率: 1MHz = 1us/tick */
+#define STEPPER_RMT_RESOLUTION_HZ   1000000
+
 /* 电机实例状态 */
 typedef struct {
     int pin_step;           // STEP 引脚
@@ -29,6 +32,7 @@ typedef struct {
     bool is_moving;         // 是否正在转动
     bool stop_request;      // 停止请求标志
     TaskHandle_t task_handle;   // 转动任务句柄
+    rmt_channel_handle_t rmt_chan;  // RMT 通道
 } stepper_motor_t;
 
 static stepper_motor_t s_motors[STEPPER_MAX_MOTORS] = {0};
@@ -74,6 +78,10 @@ static stepper_motor_t* allocate_motor(void)
 /* 释放电机实例 */
 static void free_motor(stepper_motor_t *motor)
 {
+    if (motor->rmt_chan) {
+        rmt_del_channel(motor->rmt_chan);
+        motor->rmt_chan = NULL;
+    }
     if (motor->task_handle) {
         vTaskDelete(motor->task_handle);
         motor->task_handle = NULL;
@@ -87,8 +95,8 @@ static bool is_gpio_available(int pin)
 {
     /* 限制 SPI Flash 引脚: 19-24, 26-32 */
     if ((pin >= 19 && pin <= 24) || (pin >= 26 && pin <= 32)) {
-        /* 但 25, 32, 33 是用户指定的默认引脚，需要允许 */
-        if (pin == 25 || pin == 32 || pin == 33) {
+        /* 白名单: 21(EN), 25, 32, 33 允许使用 */
+        if (pin == 21 || pin == 25 || pin == 32 || pin == 33) {
             return true;
         }
         return false;
@@ -101,14 +109,38 @@ static bool is_gpio_available(int pin)
     return pin >= 0 && pin <= 48;
 }
 
-/* 发送单个脉冲 */
-static void step_pulse(int pin_step, int speed_hz)
+/* 步进电机编码器回调 - 生成脉冲序列 */
+static size_t stepper_encoder_callback(const void *data, size_t data_size,
+                                        size_t symbols_written, size_t symbols_free,
+                                        rmt_symbol_word_t *symbols, bool *done, void *arg)
 {
-    uint32_t period_us = 1000000 / speed_hz;
-    gpio_set_level(pin_step, 1);
-    ets_delay_us(period_us / 2);  // 50% 占空比
-    gpio_set_level(pin_step, 0);
-    ets_delay_us(period_us / 2);
+    /* data 是 uint32_t 数组: [周期1_us, 周期2_us, ..., 0(结束标记)] */
+    const uint32_t *periods = (const uint32_t *)data;
+    size_t symbol_pos = 0;
+
+    while (symbol_pos < symbols_free && periods[symbols_written + symbol_pos] != 0) {
+        uint32_t period_us = periods[symbols_written + symbol_pos];
+        uint32_t high_us = period_us / 2;   // 50% 占空比
+        uint32_t low_us = period_us - high_us;
+
+        /* 限制最大时间，避免 RMT 符号溢出 (15位 = 32767 ticks) */
+        if (high_us > 30000) high_us = 30000;
+        if (low_us > 30000) low_us = 30000;
+
+        symbols[symbol_pos].level0 = 1;
+        symbols[symbol_pos].duration0 = high_us;
+        symbols[symbol_pos].level1 = 0;
+        symbols[symbol_pos].duration1 = low_us;
+
+        symbol_pos++;
+    }
+
+    /* 检查是否发送完毕 */
+    if (periods[symbols_written + symbol_pos] == 0) {
+        *done = true;
+    }
+
+    return symbol_pos;
 }
 
 /* 电机转动任务（在后台执行） */
@@ -141,36 +173,91 @@ static void stepper_move_task(void *pvParameters)
     ESP_LOGI(TAG, "Move start: steps=%d, accel=%d, const=%d, decel=%d",
              profile->steps_total, accel_steps, const_steps, decel_steps);
 
-    /* 加速度阶段 */
-    for (int i = 0; i < accel_steps && !motor->stop_request; i++) {
+    /* 分配周期数组 (每步一个周期，单位为 us，以0结束) */
+    uint32_t *periods = calloc(profile->steps_total + 1, sizeof(uint32_t));
+    if (!periods) {
+        ESP_LOGE(TAG, "Failed to allocate periods array");
+        goto cleanup;
+    }
+
+    /* 填充周期数组 - 加速阶段 */
+    for (int i = 0; i < accel_steps; i++) {
         float ratio = (float)i / accel_steps;
         int speed = profile->speed_start +
                     (int)((profile->speed_max - profile->speed_start) * ratio);
         if (speed < 1) speed = 1;
-        step_pulse(motor->pin_step, speed);
+        periods[i] = 1000000 / speed;  // 周期 us
     }
 
     /* 匀速阶段 */
-    for (int i = 0; i < const_steps && !motor->stop_request; i++) {
-        step_pulse(motor->pin_step, profile->speed_max);
+    for (int i = 0; i < const_steps; i++) {
+        periods[accel_steps + i] = 1000000 / profile->speed_max;
     }
 
     /* 减速阶段 */
-    for (int i = 0; i < decel_steps && !motor->stop_request; i++) {
+    for (int i = 0; i < decel_steps; i++) {
         float ratio = (float)i / decel_steps;
         int speed = profile->speed_max -
                     (int)((profile->speed_max - profile->speed_start) * ratio);
         if (speed < profile->speed_start) speed = profile->speed_start;
-        step_pulse(motor->pin_step, speed);
+        if (speed < 1) speed = 1;
+        periods[accel_steps + const_steps + i] = 1000000 / speed;
     }
 
-    /* 关闭使能（可选，根据需求决定是否保持使能） */
-    // gpio_set_level(motor->pin_enable, 1);  // 高电平禁用
+    /* 创建简单编码器 */
+    rmt_encoder_handle_t encoder = NULL;
+    rmt_simple_encoder_config_t encoder_config = {
+        .callback = stepper_encoder_callback,
+        .arg = NULL,
+        .min_chunk_size = 64,  // 最小块大小
+    };
 
-    motor->is_moving = false;
-    motor->stop_request = false;
+    esp_err_t err = rmt_new_simple_encoder(&encoder_config, &encoder);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create encoder: %s", esp_err_to_name(err));
+        free(periods);
+        goto cleanup;
+    }
+
+    /* 发送脉冲序列 */
+    rmt_transmit_config_t tx_config = {
+        .loop_count = 0,  // 不循环
+    };
+
+    err = rmt_transmit(motor->rmt_chan, encoder, periods,
+                       profile->steps_total * sizeof(uint32_t), &tx_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to transmit: %s", esp_err_to_name(err));
+        rmt_del_encoder(encoder);
+        free(periods);
+        goto cleanup;
+    }
+
+    /* 等待传输完成或停止请求 */
+    while (!motor->stop_request) {
+        err = rmt_tx_wait_all_done(motor->rmt_chan, 100);  // 100ms 超时
+        if (err == ESP_OK) {
+            break;  // 传输完成
+        }
+        /* 超时继续循环，检查 stop_request */
+    }
+
+    /* 如果有停止请求，禁用 RMT 通道立即停止 */
+    if (motor->stop_request) {
+        rmt_disable(motor->rmt_chan);
+        rmt_enable(motor->rmt_chan);
+        ESP_LOGI(TAG, "Move stopped by request");
+    }
+
+    /* 清理 */
+    rmt_del_encoder(encoder);
+    free(periods);
 
     ESP_LOGI(TAG, "Move complete or stopped");
+
+cleanup:
+    motor->is_moving = false;
+    motor->stop_request = false;
 
     free(params);
     motor->task_handle = NULL;
@@ -253,15 +340,45 @@ esp_err_t tool_stepper_init_execute(const char *input_json, char *output, size_t
         return ESP_ERR_NO_MEM;
     }
 
-    /* 配置 GPIO */
+    /* 创建 RMT TX 通道 - 用于生成 STEP 脉冲 */
+    rmt_tx_channel_config_t tx_chan_config = {
+        .clk_src = RMT_CLK_SRC_DEFAULT,
+        .gpio_num = pin_step,
+        .mem_block_symbols = 256,  // 更大的内存块，支持更多脉冲缓冲
+        .resolution_hz = STEPPER_RMT_RESOLUTION_HZ,  // 1MHz = 1us
+        .trans_queue_depth = 2,
+        .flags = {
+            .invert_out = false,
+            .with_dma = false,  // 步进电机脉冲量不大，不需要 DMA
+        },
+    };
+
+    esp_err_t err = rmt_new_tx_channel(&tx_chan_config, &motor->rmt_chan);
+    if (err != ESP_OK) {
+        free_motor(motor);
+        snprintf(output, output_size, "Error: failed to create RMT channel (%s)", esp_err_to_name(err));
+        cJSON_Delete(root);
+        return err;
+    }
+
+    /* 启动 RMT 通道 */
+    err = rmt_enable(motor->rmt_chan);
+    if (err != ESP_OK) {
+        free_motor(motor);
+        snprintf(output, output_size, "Error: failed to enable RMT channel (%s)", esp_err_to_name(err));
+        cJSON_Delete(root);
+        return err;
+    }
+
+    /* 配置 DIR 和 ENABLE GPIO */
     gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << pin_step) | (1ULL << pin_dir) | (1ULL << pin_enable),
+        .pin_bit_mask = (1ULL << pin_dir) | (1ULL << pin_enable),
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
-    esp_err_t err = gpio_config(&io_conf);
+    err = gpio_config(&io_conf);
     if (err != ESP_OK) {
         free_motor(motor);
         snprintf(output, output_size, "Error: failed to configure GPIO (%s)", esp_err_to_name(err));
@@ -270,7 +387,6 @@ esp_err_t tool_stepper_init_execute(const char *input_json, char *output, size_t
     }
 
     /* 初始化引脚状态 */
-    gpio_set_level(pin_step, 0);
     gpio_set_level(pin_dir, 0);
     gpio_set_level(pin_enable, 1);  // 默认禁用（高电平）
 
